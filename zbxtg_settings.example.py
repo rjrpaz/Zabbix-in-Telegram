@@ -17,6 +17,10 @@ zbx_api_user = "api"
 zbx_api_pass = "api"
 zbx_api_verify = True  # True - do not ignore self signed certificates, False - ignore
 
+#zbx_server_version = 2  # for Zabbix 2.x version
+zbx_server_version = 3  # for Zabbix 3.x version, by default, not everyone updated to 4.x yet
+#zbx_server_version = 4  # for Zabbix 4.x version, default will be changed in the future with this
+
 zbx_basic_auth = False
 zbx_basic_auth_user = "zabbix"
 zbx_basic_auth_pass = "zabbix"
@@ -47,6 +51,12 @@ zbx_db_password = "zbxtg"
 
 
 emoji_map = {
+    "Disaster": "🔥",
+    "High": "🛑",
+    "Average": "❗",
+    "Warning": "⚠️",
+    "Information": "ℹ️",
+    "Not classified": "🔘",
     "OK": "✅",
     "PROBLEM": "❗",
     "info": "ℹ️",

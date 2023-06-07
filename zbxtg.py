@@ -263,8 +263,10 @@ class TelegramAPI:
         return True
 
 
-def markdown_fix(message, offset):
+def markdown_fix(message, offset, emoji=False):
     offset = int(offset)
+    if emoji:  # https://github.com/ableev/Zabbix-in-Telegram/issues/152
+        offset -= 2
     message = "\n".join(message)
     message = message[:offset] + message[offset+1:]
     message = message.split("\n")
@@ -301,8 +303,9 @@ class ZabbixWeb:
 
         self.cookie = cookie
 
-    def graph_get(self, itemid, period, title, width, height):
-        file_img = self.tmp_dir + "/{0}.png".format("".join(itemid))
+    def graph_get(self, itemid, period, title, width, height, version=3):
+        file_img = "{0}/{1}.png".format(self.tmp_dir,                                                   
+                                        "".join(random.choice(string.ascii_letters) for e in range(10)))
 
         title = requests.utils.quote(title)
 
@@ -325,8 +328,12 @@ class ZabbixWeb:
                          "items[{0}][drawtype]={3}&items[{0}][color]={2}".format(i, itemid[i], colors[i], drawtype)
             zbx_img_url_itemids.append(itemid_url)
 
-        zbx_img_url = self.server + "/chart3.php?period={0}&name={1}" \
-                                    "&width={2}&height={3}&graphtype=0&legend=1".format(period, title, width, height)
+        zbx_img_url = self.server + "/chart3.php?"
+        if version < 4:
+            zbx_img_url += "period={0}".format(period)
+        else:
+            zbx_img_url += "from=now-{0}&to=now".format(period)
+        zbx_img_url += "&name={0}&width={1}&height={2}&graphtype=0&legend=1".format(title, width, height)
         zbx_img_url += "".join(zbx_img_url_itemids)
 
         if self.debug:
@@ -338,8 +345,7 @@ class ZabbixWeb:
             print_message("can't get image from '{0}'".format(zbx_img_url))
             return False
         res_img = answer.content
-        with open(file_img, 'wb') as fp:
-            fp.write(res_img)
+        file_bwrite(file_img, res_img)
         return file_img
 
     def api_test(self):
@@ -411,6 +417,12 @@ def file_write(filename, text):
     return True
 
 
+def file_bwrite(filename, data):
+    with open(filename, "wb") as fd:
+        fd.write(data)
+    return True
+
+
 def file_read(filename):
     with open(filename, "r") as fd:
         text = fd.readlines()
@@ -425,10 +437,10 @@ def file_append(filename, text):
 
 def external_image_get(url, tmp_dir, timeout=6):
     image_hash = hashlib.md5()
-    image_hash.update(url)
+    image_hash.update(url.encode())
     file_img = tmp_dir + "/external_{0}.png".format(image_hash.hexdigest())
     try:
-        answer = requests.get(url, timeout=timeout)
+        answer = requests.get(url, timeout=timeout, allow_redirects=True)
     except requests.exceptions.ReadTimeout as ex:
         print_message("Can't get external image from '{0}': timeout".format(url))
         return False
@@ -437,7 +449,7 @@ def external_image_get(url, tmp_dir, timeout=6):
         print_message("Can't get external image from '{0}': HTTP 404 error".format(url))
         return False
     answer_image = answer.content
-    file_write(file_img, answer_image)
+    file_bwrite(file_img, answer_image)
     return file_img
 
 
@@ -566,6 +578,7 @@ def main():
 
         else:
             print(("Hi. You should provide at least three arguments.\n"
+                   "zbxtg.py [TO] [SUBJECT] [BODY]\n\n"
                   "1. Read main page and/or wiki: {0} + {1}\n"
                   "2. Public Telegram group (discussion): {2}\n"
                   "3. Public Telegram channel: {3}\n"
@@ -589,13 +602,21 @@ def main():
         if not proxy_to_tg.find("http") and not proxy_to_tg.find("socks"):
             proxy_to_tg = "https://" + proxy_to_tg
         tg.proxies = {
-            "https": "{0}".format(zbxtg_settings.proxy_to_tg),
+            "https": "{0}".format(proxy_to_tg),
         }
 
     zbx = ZabbixWeb(server=zbxtg_settings.zbx_server, username=zbxtg_settings.zbx_api_user,
                     password=zbxtg_settings.zbx_api_pass)
 
     zbx.tmp_dir = tmp_dir
+
+    # workaround for Zabbix 4.x
+    zbx_version = 3
+
+    try:
+        zbx_version = zbxtg_settings.zbx_server_version
+    except:
+        pass
 
     if zbxtg_settings.proxy_to_zbx:
         zbx.proxies = {
@@ -639,7 +660,7 @@ def main():
             key = setting[0].replace(zbxtg_settings.zbx_tg_prefix + ";", "")
             if key not in settings_description:
                 if "--debug" in args:
-                    print_message("[ERROR] There is no '{0}' method, use --features to get help")
+                    print_message("[ERROR] There is no '{0}' method, use --features to get help".format(key))
                 continue
             if settings_description[key]["type"] == "list":
                 value = setting[1].split(",")
@@ -696,6 +717,9 @@ def main():
 
     if "--forked" in args:
         settings["forked"] = True
+
+    if "--tg-key" in args:
+        tg.key = args[args.index("--tg-key") + 1]
 
     location_coordinates = {"latitude": None, "longitude": None}
     if settings["lat"] > 0 and settings["lat"] > 0:
@@ -809,6 +833,7 @@ def main():
         pass
 
     # replace text with emojis
+    internal_using_emoji = False  # I hate that, but... https://github.com/ableev/Zabbix-in-Telegram/issues/152
     if hasattr(zbxtg_settings, "emoji_map"):
         zbxtg_body_text_emoji_support = []
         for l in zbxtg_body_text:
@@ -816,6 +841,8 @@ def main():
             for k, v in list(zbxtg_settings.emoji_map.items()):
                 l_new = l_new.replace("{{" + k + "}}", v)
             zbxtg_body_text_emoji_support.append(l_new)
+        if len("".join(zbxtg_body_text)) - len("".join(zbxtg_body_text_emoji_support)):
+            internal_using_emoji = True
         zbxtg_body_text = zbxtg_body_text_emoji_support
 
     if not is_single_message:
@@ -831,15 +858,19 @@ def main():
 
             # another case if markdown is enabled and we got parse error, try to remove "bad" symbols from message
             if tg.markdown and tg.error.find("Can't find end of the entity starting at byte offset") > -1:
+                markdown_warning = "Original message has been fixed due to {0}. " \
+                                   "Please, fix the markdown, it's slowing down messages sending."\
+                    .format(url_wiki_base + "/" + settings_description["markdown"]["url"])
                 markdown_fix_attempts = 0
-                while not tg.ok and markdown_fix_attempts != 10:
+                while not tg.ok and markdown_fix_attempts != 3:
                     offset = re.search("Can't find end of the entity starting at byte offset ([0-9]+)", tg.error).group(1)
-                    zbxtg_body_text = markdown_fix(zbxtg_body_text, offset)
+                    zbxtg_body_text = markdown_fix(zbxtg_body_text, offset, emoji=internal_using_emoji) + \
+                                      ["\n"] + [markdown_warning]
+                    tg.disable_web_page_preview = True
                     tg.send_message(uid, zbxtg_body_text)
                     markdown_fix_attempts += 1
                 if tg.ok:
-                    print_message("Original message has been fixed due to {0}"
-                                  .format(url_wiki_base + "/" + settings_description["markdown"]["url"]))
+                    print_message(markdown_warning)
 
     if is_debug:
         print((tg.result))
@@ -861,7 +892,7 @@ def main():
             if not settings["extimg"]:
                 zbxtg_file_img = zbx.graph_get(settings["zbxtg_itemid"], settings["zbxtg_image_period"],
                                                settings["zbxtg_title"], settings["zbxtg_image_width"],
-                                               settings["zbxtg_image_height"])
+                                               settings["zbxtg_image_height"], version=zbx_version)
             else:
                 zbxtg_file_img = external_image_get(settings["extimg"], tmp_dir=zbx.tmp_dir)
             zbxtg_body_text, is_modified = list_cut(zbxtg_body_text, 200)
